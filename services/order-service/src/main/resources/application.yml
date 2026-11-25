@@ -1,0 +1,42 @@
+# order-service yapılandırması. Varsayılanlar lokal geliştirme içindir (IDE / docker run).
+# Her değer ortam değişkeniyle ezilebilir; K8s'te değerler ConfigMap/Secret'tan gelir:
+#   SPRING_DATASOURCE_URL / _USERNAME / _PASSWORD, PRODUCT_SERVICE_URL, APP_VERSION, DEMO_BROKEN, SERVER_PORT
+server:
+  port: 8082
+
+spring:
+  application:
+    name: order-service
+  datasource:
+    url: jdbc:postgresql://localhost:5432/orders
+    username: postgres
+    password: postgres   # yalnızca lokal geliştirme; K8s'te Secret ile ezilir
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate   # şemayı Flyway kurar; Hibernate sadece kontrol eder
+  flyway:
+    enabled: true
+
+# Uygulamaya özel ayarlar
+app:
+  version: ${APP_VERSION:local}
+
+product-service:
+  url: ${PRODUCT_SERVICE_URL:http://localhost:8081}
+
+demo:
+  broken: ${DEMO_BROKEN:false}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true          # /actuator/health/liveness ve /readiness (K8s dışında da açık olsun)
+      group:
+        readiness:
+          include: readinessState,db,demoBroken   # product-service ile aynı: DB yoksa trafik alma

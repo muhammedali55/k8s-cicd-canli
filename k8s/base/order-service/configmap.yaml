@@ -1,0 +1,14 @@
+# order-service ortam değişkenleri (gizli olmayanlar).
+# APP_VERSION burada yok: imaja build sırasında gömülür (Dockerfile -> ARG APP_VERSION).
+# DEMO_BROKEN: "true" yapılırsa readiness DOWN olur -> canlıda "bozuk sürüm" senaryosu.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: order-service-config
+  labels:
+    app: order-service
+data:
+  SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres:5432/orders"
+  DEMO_BROKEN: "false"
+  # product-service'e cluster içi DNS adıyla ulaşılır.
+  PRODUCT_SERVICE_URL: "http://product-service:8080"

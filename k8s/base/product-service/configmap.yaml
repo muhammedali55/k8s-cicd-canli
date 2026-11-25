@@ -1,0 +1,12 @@
+# product-service ortam değişkenleri (gizli olmayanlar).
+# APP_VERSION burada yok: imaja build sırasında gömülür (Dockerfile -> ARG APP_VERSION).
+# DEMO_BROKEN: "true" yapılırsa readiness DOWN olur -> canlıda "bozuk sürüm" senaryosu.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: product-service-config
+  labels:
+    app: product-service
+data:
+  SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres:5432/products"
+  DEMO_BROKEN: "false"

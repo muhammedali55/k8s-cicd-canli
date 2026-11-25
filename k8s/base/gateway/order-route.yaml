@@ -1,0 +1,32 @@
+# /api/orders ile başlayan istekleri order-service:8080'e yönlendirir.
+# Ek kural: /info/orders -> order-service'in /api/info ucu (URLRewrite ile yol değiştirilir).
+# Canlıda yeni sürümün geldiğini dışarıdan göstermek için: curl http://localhost/info/orders
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: order-route
+spec:
+  parentRefs:
+    - name: demo-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/orders
+      backendRefs:
+        - name: order-service
+          port: 8080
+    # /info/orders (birebir) -> order-service'e giderken yol /api/info olarak yeniden yazılır
+    - matches:
+        - path:
+            type: Exact
+            value: /info/orders
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplaceFullPath
+              replaceFullPath: /api/info
+      backendRefs:
+        - name: order-service
+          port: 8080

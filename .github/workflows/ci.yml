@@ -1,0 +1,250 @@
+# CI — Sürekli Entegrasyon
+#
+# Ne yapar?
+#   - Pull request'te: yalnızca değişen servisin testlerini koşar (./mvnw verify).
+#   - main'e push'ta: test → Docker imajı build → GHCR'a push (tam pipeline).
+#   - DEPLOY_MODE = gitops ise (Yol B): yeni imaj tag'ini k8s/overlays/dev/kustomization.yaml'a
+#     yazıp commit'ler; Argo CD bu commit'i görüp cluster'ı günceller.
+#   - DEPLOY_MODE boş ya da başka bir değerse (Yol A): cd.yml bu workflow bitince çalışır ve
+#     kubectl ile deploy eder.
+#
+# DEPLOY_MODE nereden gelir? Repo → Settings → Secrets and variables → Actions → Variables
+# sekmesindeki "DEPLOY_MODE" değişkeninden. Gizli bilgi değildir, bu yüzden "secret" değil "variable".
+#
+# Gizli bilgi gerekmez: GHCR'a GitHub'ın her çalıştırmada otomatik verdiği GITHUB_TOKEN ile giriş yapılır.
+
+# Workflow'un adı; cd.yml "workflow_run" ile bu ada bakarak tetiklenir. Değiştirirsen cd.yml'i de güncelle.
+name: CI
+
+# Tetikleyiciler
+on:
+  # Pull request açıldığında / güncellendiğinde: sadece test
+  pull_request:
+    # Yalnızca servis kodu ya da bu dosya değiştiyse çalış
+    paths:
+      - "services/**"
+      - ".github/workflows/ci.yml"
+  # main dalına push geldiğinde: tam pipeline
+  push:
+    branches: [main]
+    # k8s/ BURADA YOK: GitOps job'unun yaptığı commit yalnızca k8s/ altını değiştirir,
+    # bu sayede CI kendini yeniden tetiklemez (sonsuz döngü önlemi #1).
+    paths:
+      - "services/**"
+      - ".github/workflows/ci.yml"
+
+# Varsayılan olarak token'a en az yetkiyi ver; ihtiyaç duyan job kendi yetkisini genişletir
+permissions:
+  contents: read
+
+# Aynı daldaki eski çalışma hâlâ sürüyorsa iptal et (yalnızca PR'larda; main'de her commit build edilsin)
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1) Hangi servis değişti? Ortak bilgileri (imaj öneki, tag) hesapla.
+  # ---------------------------------------------------------------------------
+  changes:
+    name: Değişen servisleri bul
+    runs-on: ubuntu-latest
+    # PR'da değişen dosya listesini API'den okumak için gerekli
+    permissions:
+      contents: read
+      pull-requests: read
+    # Bu job'un çıktıları sonraki job'larda needs.changes.outputs.<ad> ile okunur
+    outputs:
+      services: ${{ steps.filter.outputs.changes }}
+      image_prefix: ${{ steps.meta.outputs.image_prefix }}
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      # Kodu indir (paths-filter push olayında git geçmişine bakar)
+      - name: Kodu indir
+        uses: actions/checkout@v4
+
+      # Her servis için bir filtre: o servisin klasöründe değişiklik varsa adı listeye eklenir.
+      # Çıktı JSON dizisidir, ör. ["product-service"] — aşağıdaki matrix'i doğrudan bu besler.
+      - name: Değişen servisleri filtrele
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            product-service:
+              - 'services/product-service/**'
+              - '.github/workflows/ci.yml'
+            order-service:
+              - 'services/order-service/**'
+              - '.github/workflows/ci.yml'
+
+      # İmaj öneki ve tag'i tek yerde hesapla:
+      #   - GHCR imaj adları küçük harf olmak zorunda, bu yüzden kullanıcı adını küçültüyoruz (${VAR,,}).
+      #   - Tag = kısa git SHA (ilk 7 karakter). "latest" kullanmıyoruz: hangi commit'in canlıda olduğu belli olsun.
+      - name: İmaj öneki ve tag'i hesapla
+        id: meta
+        run: |
+          echo "image_prefix=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+          echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
+  # 2) Her değişen servis için: test → (main'de) imaj build → GHCR'a push
+  # ---------------------------------------------------------------------------
+  build:
+    name: ${{ matrix.service }}
+    needs: changes
+    # Hiçbir servis değişmediyse job'u atla (matrix boş listeyle çalışamaz)
+    if: needs.changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    # packages: write → GITHUB_TOKEN ile GHCR'a imaj push edebilmek için
+    permissions:
+      contents: read
+      packages: write
+    # Matrix: değişen her servis için bu job'un ayrı (ve paralel) bir kopyası çalışır
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
+    # Ortak değerleri ortam değişkenine al; run adımlarında ${{ }} yerine $DEĞİŞKEN kullanmak daha güvenli
+    env:
+      SERVICE: ${{ matrix.service }}
+      IMAGE: ${{ needs.changes.outputs.image_prefix }}/${{ matrix.service }}:${{ needs.changes.outputs.tag }}
+    steps:
+      # Kodu indir
+      - name: Kodu indir
+        uses: actions/checkout@v4
+
+      # Java 21 (Temurin) kur ve Maven bağımlılıklarını önbelleğe al.
+      # Önbellek anahtarı servisin pom.xml'inden üretilir; pom değişmedikçe bağımlılıklar tekrar indirilmez.
+      - name: Java 21 kur (Maven cache ile)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+          cache-dependency-path: services/${{ matrix.service }}/pom.xml
+
+      # Testleri ve paketlemeyi çalıştır. -B: "batch mode", CI loglarını sade tutar.
+      - name: Test (./mvnw verify)
+        working-directory: services/${{ matrix.service }}
+        run: ./mvnw -B verify
+
+      # --- Buradan sonrası yalnızca main'e push'ta çalışır (PR'da imaj üretmeyiz) ---
+
+      # Docker Buildx: modern build motoru; katman önbelleğini GitHub Actions cache'inde tutabilir
+      - name: Docker Buildx kur
+        if: github.event_name == 'push'
+        uses: docker/setup-buildx-action@v3
+
+      # GHCR'a giriş: kullanıcı = workflow'u tetikleyen kişi, şifre = otomatik GITHUB_TOKEN (dosyaya yazılmaz)
+      - name: GHCR'a giriş yap
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Servisin kendi Dockerfile'ı ile imajı build et ve GHCR'a push et
+      - name: İmajı build et ve push et
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@v6
+        with:
+          context: services/${{ matrix.service }}
+          push: true
+          tags: ${{ env.IMAGE }}
+          # Sürümü imaja göm: /api/info bu değeri gösterir (Dockerfile'daki ARG APP_VERSION)
+          build-args: |
+            APP_VERSION=${{ needs.changes.outputs.tag }}
+          # Bu etiket GHCR paketini repo'ya bağlar (paket sayfasında repo linki görünür)
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          # Docker katman önbelleği: değişmeyen katmanlar bir sonraki build'de yeniden üretilmez
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      # cd.yml'in hangi servisi hangi imaja geçireceğini bilmesi için küçük bir not dosyası yaz:
+      # dosya adı = servis adı, içerik = tam imaj adı
+      - name: Deploy bilgisini yaz
+        if: github.event_name == 'push'
+        run: |
+          mkdir -p deploy-info
+          echo "$IMAGE" > "deploy-info/$SERVICE"
+
+      # Not dosyasını artifact olarak yükle; cd.yml bunu workflow_run üzerinden indirir
+      - name: Deploy bilgisini artifact olarak yükle
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-${{ matrix.service }}
+          path: deploy-info/${{ matrix.service }}
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # 3) Yol B — GitOps: yeni tag'i Git'e yaz, deploy'u Argo CD yapsın
+  #    Varsayılan KAPALI. Açmak için repo variable: DEPLOY_MODE = gitops
+  #    Bu modda cd.yml çalışmaz (cd.yml aynı değişkene bakıp kendini atlar).
+  # ---------------------------------------------------------------------------
+  gitops-update:
+    name: GitOps — kustomization.yaml güncelle
+    needs: [changes, build]
+    # Yalnızca main'e push'ta, en az bir servis build edildiyse ve GitOps modu açıksa
+    if: >-
+      github.event_name == 'push' &&
+      vars.DEPLOY_MODE == 'gitops' &&
+      needs.changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    # contents: write → repo'ya commit push edebilmek için
+    permissions:
+      contents: write
+    # İki CI çalışması aynı anda kustomization.yaml'a yazmaya kalkmasın
+    concurrency:
+      group: gitops-update
+      cancel-in-progress: false
+    env:
+      SERVICES: ${{ needs.changes.outputs.services }}
+      IMAGE_PREFIX: ${{ needs.changes.outputs.image_prefix }}
+      TAG: ${{ needs.changes.outputs.tag }}
+      # Overlay'deki "images:" girdilerinin adı (base manifest'lerdeki imaj adı). Fork'ta IMAGE_PREFIX
+      # farklı olur (ghcr.io/<fork-sahibi>); eşleştirme bu sabit adla yapılır, yeni ad newName'e yazılır.
+      BASE_IMAGE_PREFIX: ghcr.io/muhammedali55
+    steps:
+      # main dalını indir (commit'i SHA'ya değil dala atacağımız için ref: main)
+      - name: main dalını indir
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      # kustomize, GitHub'ın ubuntu runner imajında hazır kurulu gelir; sürümünü loga yazalım
+      - name: kustomize sürümünü göster
+        run: kustomize version
+
+      # Değişen her servis için overlay'deki "images:" bloğunda tag'i güncelle.
+      # Örn: ghcr.io/muhammedali55/product-service → ghcr.io/muhammedali55/product-service:a1b2c3d
+      - name: İmaj tag'lerini güncelle (kustomize edit set image)
+        working-directory: k8s/overlays/dev
+        run: |
+          for svc in $(echo "$SERVICES" | jq -r '.[]'); do
+            echo "→ $BASE_IMAGE_PREFIX/$svc => $IMAGE_PREFIX/$svc:$TAG"
+            kustomize edit set image "$BASE_IMAGE_PREFIX/$svc=$IMAGE_PREFIX/$svc:$TAG"
+          done
+          cat kustomization.yaml
+
+      # Değişikliği commit'le ve push et.
+      # Sonsuz döngü önlemi #2: GITHUB_TOKEN ile yapılan push yeni bir workflow tetiklemez (GitHub kuralı).
+      # Önlem #1 yukarıda: push tetikleyicisinin paths listesinde k8s/ yok.
+      # Not: main dalında "branch protection" varsa bu push reddedilir; o durumda PR açan bir yaklaşım gerekir.
+      - name: Commit ve push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add k8s/overlays/dev/kustomization.yaml
+          # Değişiklik yoksa (aynı tag zaten yazılıysa) sessizce çık
+          if git diff --cached --quiet; then
+            echo "kustomization.yaml zaten güncel, commit gerekmiyor."
+            exit 0
+          fi
+          git commit -m "deploy(dev): imaj tag'i $TAG ($(echo "$SERVICES" | jq -r 'join(", ")'))"
+          # Bu arada main'e başka commit geldiyse üstüne al, sonra push et
+          git pull --rebase origin main
+          git push origin HEAD:main

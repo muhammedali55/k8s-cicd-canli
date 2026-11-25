@@ -1,0 +1,48 @@
+# Argo CD Application — Yol B: GitOps
+#
+# Argo CD'ye şunu söyler: "Bu Git deposundaki k8s/overlays/dev klasörü, demo namespace'inin
+# olması gereken hâlidir. Farkı gör, otomatik uygula."
+#   - automated: Git'te yeni commit olunca kendiliğinden sync eder (CI'ın kubectl çalıştırmasına gerek yok).
+#   - prune: true    → Git'ten silinen kaynakları cluster'dan da siler.
+#   - selfHeal: true → Cluster'da elle yapılan değişikliği (ör. kubectl set image) Git'tekine geri çeker.
+#
+# DİKKAT: selfHeal yüzünden Yol A (cd.yml / Jenkins Deploy) ile aynı anda kullanılmaz;
+# kubectl set image ile verilen yeni imaj birkaç saniye içinde geri alınır.
+# Bu dosyayı uygularken GitHub'da repo variable DEPLOY_MODE=gitops yapın (Jenkins'te de aynı değişken).
+#
+# Uygulamak için:  kubectl apply -f gitops/argocd-app.yaml   (kurulum: gitops/README.md)
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  # Argo CD arayüzünde görünecek uygulama adı
+  name: k8s-cicd-dev
+  # Application nesneleri Argo CD'nin kendi namespace'inde durur
+  namespace: argocd
+spec:
+  # Argo CD'nin varsayılan projesi (yetki sınırları için; demo'da yeterli)
+  project: default
+
+  # NEREDEN: izlenecek Git deposu, dal ve klasör
+  source:
+    # Repo public olmalı; private ise Argo CD'ye repo credential'ı eklemek gerekir
+    repoURL: https://github.com/muhammedali55/k8s-cicd-canli.git
+    targetRevision: main
+    # Kustomize overlay'i; Argo CD kustomization.yaml'ı görüp kendisi "kustomize build" yapar
+    path: k8s/overlays/dev
+
+  # NEREYE: Argo CD'nin kurulu olduğu cluster'ın kendisi, demo namespace'i
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: demo
+
+  # NASIL: otomatik senkronizasyon politikası
+  syncPolicy:
+    automated:
+      # Git'ten silinen kaynakları cluster'dan da sil
+      prune: true
+      # Cluster'da elle yapılan değişiklikleri Git'teki hâline geri döndür
+      selfHeal: true
+    syncOptions:
+      # demo namespace'i yoksa oluştur
+      - CreateNamespace=true

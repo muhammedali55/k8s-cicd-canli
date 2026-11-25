@@ -1,0 +1,21 @@
+# dev ortamı: base'deki her şeyi "demo" namespace'ine, belirli imaj tag'leriyle kurar.
+# Pipeline'lar ve Argo CD bu dosyada YALNIZCA "images:" bloğunu değiştirir, örn:
+#   kustomize edit set image ghcr.io/muhammedali55/product-service=ghcr.io/muhammedali55/product-service:<git-sha>
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: demo
+
+resources:
+  - ../../base
+
+images:
+  - name: ghcr.io/muhammedali55/product-service
+    newName: ghcr.io/muhammedali55/product-service
+    newTag: 0.1.0
+  - name: ghcr.io/muhammedali55/order-service
+    newName: ghcr.io/muhammedali55/order-service
+    newTag: 0.1.0
+
+# Not: APP_VERSION burada YOK. Sürüm imaja build sırasında gömülür (Dockerfile: ARG APP_VERSION),
+# böylece hem "kubectl set image" (Yol A) hem Argo CD (Yol B) ile /api/info doğru sürümü gösterir.

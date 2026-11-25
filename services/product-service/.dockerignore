@@ -1,0 +1,12 @@
+# Docker build bağlamına girmeyecek dosyalar (imaj küçük ve tekrar üretilebilir kalsın).
+target/
+.idea/
+.vscode/
+*.iml
+.git
+.gitignore
+.gitattributes
+Dockerfile
+.dockerignore
+HELP.md
+mvnw.cmd

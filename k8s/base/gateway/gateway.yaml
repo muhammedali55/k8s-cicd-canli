@@ -1,0 +1,14 @@
+# Dış dünyadan gelen HTTP trafiğinin giriş kapısı (Gateway API).
+# gatewayClassName "traefik": Traefik bu Gateway'i sahiplenir (cluster/traefik-values.yaml).
+# Listener portu 8000 = Traefik'in "web" entrypoint'i; host:80 -> node:80 -> Traefik:8000.
+# Varsayılan olarak yalnızca aynı namespace'teki (demo) HTTPRoute'lar bağlanabilir.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: demo-gateway
+spec:
+  gatewayClassName: traefik
+  listeners:
+    - name: web
+      protocol: HTTP
+      port: 8000

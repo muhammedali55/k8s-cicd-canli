@@ -1,0 +1,80 @@
+# product-service Deployment'ı — ürün kataloğu ve stok.
+# - 2 replika; rolling update'te maxUnavailable: 0, maxSurge: 1.
+#   Yeni pod "ready" olmadan eski pod öldürülmez. Bozuk sürüm (DEMO_BROKEN=true) readiness'i
+#   geçemeyeceği için eski sürüm ayakta kalır ve trafik kesilmez.
+# - startupProbe: Spring Boot açılışı yavaş; açılış bitene kadar liveness/readiness beklemede.
+# - livenessProbe -> /actuator/health/liveness  (takılırsa container yeniden başlatılır)
+# - readinessProbe -> /actuator/health/readiness (hazır değilse Service trafiği göndermez)
+# - Container adı "product-service": pipeline'lar "kubectl set image deployment/product-service product-service=..." kullanır.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: product-service
+  labels:
+    app: product-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: product-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: product-service
+    spec:
+      containers:
+        - name: product-service
+          # Tag overlay'deki "images:" bloğundan gelir (k8s/overlays/dev/kustomization.yaml).
+          image: ghcr.io/muhammedali55/product-service:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          # Gizli olmayan ayarlar ConfigMap'ten...
+          envFrom:
+            - configMapRef:
+                name: product-service-config
+          # ...veritabanı kullanıcı adı ve şifresi Secret'tan.
+          env:
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_USER
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_PASSWORD
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60     # en fazla 5 dakika açılış süresi
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            periodSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 250m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false

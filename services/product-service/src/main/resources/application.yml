@@ -1,0 +1,35 @@
+# product-service ayarları.
+# Varsayılanlar lokal geliştirme içindir (IDE / docker run).
+# K8s'te ortam değişkenleriyle ezilir: SPRING_DATASOURCE_URL, SPRING_DATASOURCE_USERNAME,
+# SPRING_DATASOURCE_PASSWORD, SERVER_PORT, APP_VERSION, DEMO_BROKEN.
+spring:
+  application:
+    name: product-service
+  datasource:
+    url: jdbc:postgresql://localhost:5432/products
+    username: postgres
+    password: postgres   # yalnızca lokal geliştirme; K8s'te Secret'tan gelir
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate   # şemayı Flyway yönetir, Hibernate sadece kontrol eder
+  flyway:
+    enabled: true
+
+server:
+  port: 8081
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-components: always
+      probes:
+        enabled: true   # /actuator/health/liveness ve /actuator/health/readiness
+      group:
+        readiness:
+          # Hazır mıyım? Uygulama durumu + veritabanı + bozuk sürüm anahtarı
+          include: readinessState,db,demoBroken

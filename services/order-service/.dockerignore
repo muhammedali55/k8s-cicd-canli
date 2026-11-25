@@ -1,0 +1,11 @@
+# Docker build context'ine gönderilmeyecek dosyalar: build çıktıları, IDE dosyaları, git.
+target/
+.idea/
+.vscode/
+*.iml
+.git
+.gitignore
+.gitattributes
+Dockerfile
+.dockerignore
+HELP.md

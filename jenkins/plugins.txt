@@ -1,0 +1,17 @@
+# Jenkins imajı build edilirken önceden kurulacak eklentiler (jenkins-plugin-cli okur).
+# Sürüm yazılmadığında eklentinin o anki güncel sürümü kurulur.
+
+# Declarative Pipeline ve Jenkinsfile desteği (pipeline eklenti paketi)
+workflow-aggregator
+# Git deposundan kod çekme (checkout scm)
+git
+# GitHub webhook'unu karşılayan uç (/github-webhook/) ve githubPush() tetikleyicisi
+github
+# Jenkinsfile içinde docker.build(...) ve docker.withRegistry(...) kullanımı
+docker-workflow
+# Credential'ları pipeline'a ortam değişkeni / dosya olarak bağlama
+credentials-binding
+# withKubeConfig(...): kubeconfig credential'ı ile kubectl çalıştırma
+kubernetes-cli
+# Stage'leri tablo hâlinde gösteren klasik görünüm (eğitimde görsel kolaylık)
+pipeline-stage-view

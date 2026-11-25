@@ -1,0 +1,186 @@
+// Jenkinsfile — .github/workflows/ci.yml (+ cd.yml'deki deploy) ile aynı mantık:
+//   Checkout → Test → Build Image → Push → Deploy
+// Fark: Actions'ta servisler matrix ile PARALEL ve ayrı makinelerde koşar; burada aynı
+// Jenkins'te SIRAYLA bir döngüyle koşarlar (ortak Maven önbelleğine aynı anda yazılmasın diye).
+//
+// Gerekli credential'lar (Jenkins → Manage Jenkins → Credentials, bkz. jenkins/README.md):
+//   ghcr-creds : "Username with password" — GitHub kullanıcı adı + write:packages yetkili PAT
+//   kubeconfig : "Secret file"            — kind get kubeconfig --internal çıktısı
+//
+// DİKKAT: Argo CD (Yol B) açıksa Deploy stage'inin yaptığı değişikliği selfHeal geri alır.
+// Argo CD kullanırken Jenkins'te global ortam değişkeni DEPLOY_MODE=gitops tanımlayın;
+// Deploy stage'i o zaman atlanır (Actions'taki vars.DEPLOY_MODE ile aynı fikir).
+
+// Değişen servisleri bulur. Actions'taki "paths" filtresi + dorny/paths-filter'ın karşılığı.
+// Son başarılı build'den bu yana services/<servis>/ altında değişiklik olanları döner.
+// İlk build'de (karşılaştıracak commit yokken) ya da Jenkinsfile değiştiyse hepsini döner
+// (ci.yml'de de workflow dosyası değişince iki servis birden derlenir).
+def changedServices(List all, String previous, String current) {
+    if (!previous) {
+        return all
+    }
+    def files = sh(script: "git diff --name-only ${previous} ${current}", returnStdout: true).readLines()
+    if (files.contains('jenkins/Jenkinsfile')) {
+        return all
+    }
+    return all.findAll { svc -> files.any { it.startsWith("services/${svc}/") } }
+}
+
+pipeline {
+    // Herhangi bir uygun Jenkins agent'ında çalış (bizde tek node: Jenkins'in kendisi)
+    agent any
+
+    options {
+        // Otomatik checkout'u kapat; Checkout'u aşağıda kendi stage'imizde açıkça yapıyoruz
+        skipDefaultCheckout()
+        // Aynı job'un iki build'i aynı anda deploy etmesin (Actions'taki concurrency karşılığı)
+        disableConcurrentBuilds()
+    }
+
+    // GitHub webhook'u gelince build başlat ("github" eklentisi; Actions'taki "on: push" karşılığı)
+    triggers {
+        githubPush()
+    }
+
+    environment {
+        // İmaj öneki: ghcr.io/<github-kullanıcısı>  (küçük harf olmalı)
+        IMAGE_PREFIX = 'ghcr.io/muhammedali55'
+        // Deploy edilecek namespace (SPEC §3)
+        NAMESPACE = 'demo'
+        // Maven bağımlılıklarını kalıcı volume'da tut (Actions'taki "cache: maven" karşılığı)
+        MAVEN_OPTS = '-Dmaven.repo.local=/var/jenkins_home/.m2/repository'
+    }
+
+    stages {
+
+        // GitHub Actions karşılığı: actions/checkout@v4 + "changes" job'u (değişen servisler, tag)
+        stage('Checkout') {
+            steps {
+                script {
+                    // Kodu indir; dönen haritada commit ve dal bilgileri var
+                    def scmVars = checkout scm
+                    // main dalında mıyız? (normal Pipeline job'unda "origin/main", multibranch'te "main" gelir)
+                    // Actions'taki "github.event_name == 'push'" (main'e push) koşulunun karşılığı
+                    env.IS_MAIN = (scmVars.GIT_BRANCH in ['main', 'origin/main']).toString()
+                    // Tag = kısa git SHA (7 karakter), Actions'taki ${GITHUB_SHA::7} ile aynı
+                    env.TAG = scmVars.GIT_COMMIT.take(7)
+                    // Projedeki servisler (Actions'taki paths-filter "filters:" listesinin karşılığı)
+                    def allServices = ['product-service', 'order-service']
+                    // Değişen servisleri bul, virgülle birleştirip ortam değişkenine yaz
+                    def services = changedServices(allServices, scmVars.GIT_PREVIOUS_SUCCESSFUL_COMMIT, scmVars.GIT_COMMIT)
+                    env.SERVICES = services.join(',')
+                    echo "Dal: ${scmVars.GIT_BRANCH} | Tag: ${env.TAG} | Değişen servisler: ${env.SERVICES ?: '(yok)'}"
+                }
+            }
+        }
+
+        // GitHub Actions karşılığı: "Test (./mvnw verify)" adımı (setup-java + mvnw)
+        stage('Test') {
+            // Değişen servis yoksa atla (Actions'taki: if: needs.changes.outputs.services != '[]')
+            when { expression { return env.SERVICES ? true : false } }
+            steps {
+                script {
+                    for (svc in env.SERVICES.tokenize(',')) {
+                        dir("services/${svc}") {
+                            sh './mvnw -B verify'
+                        }
+                    }
+                }
+            }
+        }
+
+        // GitHub Actions karşılığı: docker/setup-buildx-action + docker/build-push-action (build kısmı)
+        stage('Build Image') {
+            // Yalnızca main dalında imaj üret (Actions'taki: if: github.event_name == 'push')
+            when {
+                allOf {
+                    expression { env.IS_MAIN == 'true' }
+                    expression { return env.SERVICES ? true : false }
+                }
+            }
+            steps {
+                script {
+                    for (svc in env.SERVICES.tokenize(',')) {
+                        // docker build -t ghcr.io/.../<servis>:<tag> --build-arg APP_VERSION=<tag> services/<servis>
+                        // (ci.yml'deki build-args ile aynı: sürüm imaja gömülür, /api/info bunu gösterir)
+                        docker.build("${env.IMAGE_PREFIX}/${svc}:${env.TAG}",
+                                     "--build-arg APP_VERSION=${env.TAG} services/${svc}")
+                    }
+                }
+            }
+        }
+
+        // GitHub Actions karşılığı: docker/login-action (GITHUB_TOKEN) + build-push-action (push: true)
+        stage('Push') {
+            when {
+                allOf {
+                    expression { env.IS_MAIN == 'true' }
+                    expression { return env.SERVICES ? true : false }
+                }
+            }
+            steps {
+                script {
+                    // ghcr-creds credential'ı ile GHCR'a giriş yap; şifre loglarda maskelenir
+                    docker.withRegistry('https://ghcr.io', 'ghcr-creds') {
+                        for (svc in env.SERVICES.tokenize(',')) {
+                            docker.image("${env.IMAGE_PREFIX}/${svc}:${env.TAG}").push()
+                        }
+                    }
+                }
+            }
+        }
+
+        // GitHub Actions karşılığı: cd.yml (kubectl set image → rollout status → başarısızsa undo)
+        stage('Deploy') {
+            // GitOps modunda atla: deploy'u Argo CD yapar (Actions'taki: vars.DEPLOY_MODE != 'gitops')
+            when {
+                allOf {
+                    expression { env.IS_MAIN == 'true' }
+                    expression { return env.SERVICES ? true : false }
+                    expression { env.DEPLOY_MODE != 'gitops' }
+                }
+            }
+            steps {
+                script {
+                    def failed = []
+                    // kubeconfig credential'ını geçici bir dosyaya yaz ve KUBECONFIG olarak ayarla
+                    withKubeConfig([credentialsId: 'kubeconfig']) {
+                        for (svc in env.SERVICES.tokenize(',')) {
+                            def image = "${env.IMAGE_PREFIX}/${svc}:${env.TAG}"
+                            // 1) Deployment'taki container'ın imajını değiştir (container adı = servis adı)
+                            sh "kubectl -n ${env.NAMESPACE} set image deployment/${svc} ${svc}=${image}"
+                            // 2) Yeni pod'lar hazır olana kadar en fazla 120 sn bekle
+                            def rc = sh(script: "kubectl -n ${env.NAMESPACE} rollout status deployment/${svc} --timeout=120s",
+                                        returnStatus: true)
+                            if (rc != 0) {
+                                // 3) Başarısız: önceki sürüme dön
+                                echo "${svc} rollout başarısız, geri alınıyor (rollout undo)."
+                                sh "kubectl -n ${env.NAMESPACE} rollout undo deployment/${svc}"
+                                sh(script: "kubectl -n ${env.NAMESPACE} rollout status deployment/${svc} --timeout=120s",
+                                   returnStatus: true)
+                                failed << svc
+                            }
+                        }
+                    }
+                    // Geri alınan servis varsa build'i kırmızı bitir
+                    if (failed) {
+                        error("Rollout başarısız olup geri alınan servisler: ${failed.join(', ')}")
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        // Her durumda: yerel diskte birikmesin diye bu build'in ürettiği imajları sil
+        always {
+            script {
+                if (env.SERVICES && env.TAG) {
+                    for (svc in env.SERVICES.tokenize(',')) {
+                        sh(script: "docker rmi ${env.IMAGE_PREFIX}/${svc}:${env.TAG} || true", returnStatus: true)
+                    }
+                }
+            }
+        }
+    }
+}

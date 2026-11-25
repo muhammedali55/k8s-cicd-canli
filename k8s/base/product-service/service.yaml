@@ -1,0 +1,15 @@
+# product-service için ClusterIP Service: cluster içinden "product-service:8080" adresiyle erişilir.
+# HTTPRoute da trafiği bu Service'e yönlendirir.
+apiVersion: v1
+kind: Service
+metadata:
+  name: product-service
+  labels:
+    app: product-service
+spec:
+  selector:
+    app: product-service
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

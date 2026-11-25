@@ -1,0 +1,29 @@
+# Lokal Jenkins: LTS sürümü, eklentiler önceden kurulu, veriler kalıcı volume'da.
+# Başlatmak için:  cd jenkins && docker compose up -d --build
+# Arayüz:          http://localhost:8080   (ilk açılış adımları: jenkins/README.md)
+
+services:
+  jenkins:
+    # İmajı bu klasördeki Dockerfile'dan üret (LTS + Docker CLI + kubectl + plugins.txt)
+    build: .
+    # Sabit isim: "docker network connect kind jenkins" gibi komutlarda kolayca anılsın
+    container_name: jenkins
+    # Eğitim kolaylığı: root olarak çalıştırıyoruz ki host'un Docker socket'ine izin sorunu yaşanmasın.
+    # Gerçek ortamda bunu YAPMAYIN; socket'e erişen her şey host'ta root yetkisine eşdeğerdir.
+    user: root
+    ports:
+      # Jenkins web arayüzü
+      - "8080:8080"
+    volumes:
+      # Kalıcı volume: job'lar, credential'lar, eklentiler, Maven önbelleği container silinse de kalır
+      - jenkins_home:/var/jenkins_home
+      # Host'un Docker daemon'una bağlan: pipeline "docker build/push" komutlarını host'ta çalıştırır
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+    # Not: kind cluster'ına erişim için container "kind" Docker ağına da bağlanmalı.
+    # Bunu burada "networks:" ile yapmıyoruz, çünkü cluster yoksa compose açılmaz.
+    # Cluster kurulduktan sonra:  docker network connect kind jenkins   (bkz. README)
+
+volumes:
+  # İsimli volume; "docker compose down" silmez, yalnızca "down -v" siler
+  jenkins_home:

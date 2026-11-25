@@ -1,0 +1,45 @@
+# Traefik Helm değerleri: Traefik'i Gateway API sağlayıcısı olarak çalıştırır.
+# - Gateway nesnesini chart değil biz yazıyoruz (k8s/base/gateway/gateway.yaml),
+#   chart yalnızca "traefik" adlı GatewayClass'ı oluşturur.
+# - "web" entrypoint'i (container içinde 8000) node'un 80 portuna hostPort ile bağlanır;
+#   kind-config.yaml host:80 -> node:80 eşlemesini yapar.
+
+providers:
+  kubernetesGateway:
+    enabled: true          # Gateway API (Gateway + HTTPRoute) desteği açık
+  kubernetesIngress:
+    enabled: false         # Klasik Ingress kullanmıyoruz
+  kubernetesCRD:
+    enabled: false         # Traefik'e özel IngressRoute CRD'lerini de kullanmıyoruz
+
+gateway:
+  enabled: false           # Varsayılan Gateway'i chart kurmasın; bizimki demo namespace'inde
+
+gatewayClass:
+  enabled: true
+  name: traefik            # k8s/base/gateway/gateway.yaml bu adı kullanır
+
+ports:
+  web:
+    port: 8000             # Gateway listener portu bununla aynı olmalı
+    hostPort: 80           # node:80 -> Traefik:8000
+
+service:
+  spec:
+    type: ClusterIP        # kind'da LoadBalancer yok; dış erişim hostPort ile
+
+# hostPort kullanıldığı için tek node'da aynı anda iki Traefik pod'u olamaz:
+# önce eskisi kapanır, sonra yenisi açılır.
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+    maxSurge: 0
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi

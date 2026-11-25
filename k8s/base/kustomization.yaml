@@ -1,0 +1,37 @@
+# Base: ortamdan bağımsız tüm Kubernetes kaynakları.
+# Namespace ve imaj tag'i burada DEĞİL, overlay'de (k8s/overlays/dev) belirlenir.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  # Veritabanı
+  - postgres/init-configmap.yaml
+  - postgres/service.yaml
+  - postgres/statefulset.yaml
+  # product-service
+  - product-service/configmap.yaml
+  - product-service/deployment.yaml
+  - product-service/service.yaml
+  # order-service
+  - order-service/configmap.yaml
+  - order-service/deployment.yaml
+  - order-service/service.yaml
+  - order-service/hpa.yaml
+  # Dış erişim (Gateway API)
+  - gateway/gateway.yaml
+  - gateway/product-route.yaml
+  - gateway/order-route.yaml
+
+# PostgreSQL kullanıcı adı/şifresi.
+# DİKKAT: Bu değerler YALNIZCA DEMO AMAÇLIDIR (lokal kind cluster'ı, CLAUDE.md'deki postgres/postgres).
+# Gerçek bir ortamda şifre Git'e girmez; Sealed Secrets / External Secrets gibi bir araçla gelir.
+# disableNameSuffixHash: Secret adı sabit "postgres-secret" kalsın (servisler bu adı kullanır).
+secretGenerator:
+  - name: postgres-secret
+    literals:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    options:
+      disableNameSuffixHash: true
+      labels:
+        app: postgres

@@ -21,14 +21,14 @@ Odak iş mantığı değil, uygulamayı taşıyan boru hattıdır. İş mantığ
 | Servisler arası çağrı | Spring `RestClient` |
 | Test | JUnit 5; repository testleri H2 ile (`test` profili). Testcontainers KULLANILMAZ (Jenkins'te Docker-in-Docker derdi olmasın) |
 | Container | Multi-stage Dockerfile, çalışma imajı `eclipse-temurin:21-jre`, non-root kullanıcı |
-| Registry | GHCR: `ghcr.io/<GITHUB_KULLANICI>/<servis-adı>:<git-sha-kısa>` |
+| Registry | GHCR: `ghcr.io/muhammedali55/<servis-adı>:<git-sha-kısa>` |
 | Lokal cluster | kind, cluster adı `k8s-cicd`, tek node |
 | Dışarıdan erişim | Gateway API (`Gateway` + `HTTPRoute`), implementasyon: Traefik (Helm). ingress-nginx KULLANILMAZ — Mart 2026'da emekliye ayrıldı |
 | Manifest yönetimi | Kustomize: `k8s/base` + `k8s/overlays/dev` |
 | CI | GitHub Actions (`ci.yml`, `cd.yml`) ve Jenkins (`Jenkinsfile`) — aynı adımlar |
 | GitOps | Argo CD, `k8s/overlays/dev` yolunu izler |
 
-`<GITHUB_KULLANICI>`: Ajanları başlatmadan önce bu yer tutucuyu kendi GitHub kullanıcı adınla değiştir.
+GitHub kullanıcı adı: `muhammedali55` (repo: `github.com/muhammedali55/k8s-cicd-canli`). Fork eden katılımcı kendi adını kullanır.
 
 ## 3. Ortak isimler ve port'lar (sözleşme — değiştirilemez)
 
